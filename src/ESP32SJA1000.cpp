@@ -294,26 +294,34 @@ int ESP32SJA1000Class::filter(int id, int mask)
   return 1;
 }
 
-int ESP32SJA1000Class::filterExtended(long id, long mask)
+int ESP32SJA1000Class::filterExtended(long id, long mask, bool rtrId, bool rtrMask)
 {
-  id &= 0x1FFFFFFF;
-  mask &= ~(mask & 0x1FFFFFFF);
+	modifyRegister(REG_MOD, 0x01, 0x01); // reset mode
 
-  modifyRegister(REG_MOD, 0x17, 0x01); // reset
+	uint32_t idFilter = id & 0x1FFFFFFF;        //'1' and '0' bits need to be exact as the received bit to be a valid ID.
+	uint32_t maskFilter = mask & 0x1FFFFFFF;    //'1' bits admit all bits to be received. '0' bits admit bits to be received only if the idFilter bits equals the id input bit in CAN.
+	uint8_t temp[4];
 
-  writeRegister(REG_ACRn(0), id >> 21);
-  writeRegister(REG_ACRn(1), id >> 13);
-  writeRegister(REG_ACRn(2), id >> 5);
-  writeRegister(REG_ACRn(3), id << 5);
+	idFilter <<= 3;
+	if (rtrId) idFilter |= (1 << 2); //RTR in bit 2
+	memcpy(temp, &idFilter, 4);
+	writeRegister(REG_ACRn(0), temp[3]);//id
+	writeRegister(REG_ACRn(1), temp[2]);
+	writeRegister(REG_ACRn(2), temp[1]);
+	writeRegister(REG_ACRn(3), temp[0]);
 
-  writeRegister(REG_AMRn(0), mask >> 21);
-  writeRegister(REG_AMRn(1), mask >> 13);
-  writeRegister(REG_AMRn(2), mask >> 5);
-  writeRegister(REG_AMRn(3), (mask << 5) | 0x1f);
+	maskFilter <<= 3;
+	if (rtrMask) maskFilter |= (1 << 2); //RTR in bit 2
+	memcpy(temp, &maskFilter, 4);
+	writeRegister(REG_AMRn(0), temp[3]);//mask
+	writeRegister(REG_AMRn(1), temp[2]);
+	writeRegister(REG_AMRn(2), temp[1]);
+	writeRegister(REG_AMRn(3), temp[0]);
 
-  modifyRegister(REG_MOD, 0x17, 0x00); // normal
+	modifyRegister(REG_MOD, 0x01, 0x00); // (By Henry) Operating mode
+	modifyRegister(REG_MOD, 0x08, 0x08); // (By Henry) Single filter mode TWAI_RX_FILTER_MODE
 
-  return 1;
+	return 1;
 }
 
 int ESP32SJA1000Class::observe()
