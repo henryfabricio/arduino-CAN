@@ -29,7 +29,7 @@ public:
   using CANControllerClass::filter;
   virtual int filter(int id, int mask);
   using CANControllerClass::filterExtended;
-  virtual int filterExtended(long id, long mask);
+  virtual int filterExtended(long id, long mask, bool rtr, bool rtrMask);
 
   virtual int observe();
   virtual int loopback();
