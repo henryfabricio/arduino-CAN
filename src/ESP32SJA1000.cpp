@@ -11,23 +11,26 @@
 
 #define REG_BASE                   0x3ff6b000
 
-#define REG_MOD                    0x00
-#define REG_CMR                    0x01
-#define REG_SR                     0x02
-#define REG_IR                     0x03
-#define REG_IER                    0x04
+//All registers bellow are calculated by formula: Register add = (Add-REG_BASE)/4
+//Address are indicated in page 555 of manual: https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf
+#define REG_MOD                    0x00 //TWAI_MODE_REG
+#define REG_CMR                    0x01 //TWAI_CMD_REG
+#define REG_SR                     0x02 //TWAI_STATUS_REG
+#define REG_IR                     0x03 //TWAI_INT_RAW_REG
+#define REG_IER                    0x04 //TWAI_INT_ENA_REG New ESP revision 2 have brp_div bit. Search in this link for CONFIG_ESP32_REV_MIN: https://github.com/espressif/esp-idf/commit/03d5742e110d2d5a8fbdf60ad9fcf894d3f98eb5
+#define  DRIVER_DEFAULT_INTERRUPTS 0xE7 //Exclude data overrun (bit[3]) and brp_div (bit[4])
+#define  BRP_DIV_EN_BIT            0x10 //Bit mask for brp_div in the interrupt register: https://www.esp32.com/viewtopic.php?t=15581
+#define REG_BTR0                   0x06 //TWAI_BUS_TIMING_0_REG
+#define REG_BTR1                   0x07 //TWAI_BUS_TIMING_1_REG
+#define REG_OCR                    0x08 //(By Henry warning) Is this address correct? I dont find 0x3FF6B020 register in the manual
 
-#define REG_BTR0                   0x06
-#define REG_BTR1                   0x07
-#define REG_OCR                    0x08
-
-#define REG_ALC                    0x0b
-#define REG_ECC                    0x0c
-#define REG_EWLR                   0x0d
-#define REG_RXERR                  0x0e
-#define REG_TXERR                  0x0f
-#define REG_SFF                    0x10
-#define REG_EFF                    0x10
+#define REG_ALC                    0x0b //TWAI_ARB_LOST_CAP_REG
+#define REG_ECC                    0x0c //TWAI_ERR_CODE_CAP_REG
+#define REG_EWLR                   0x0d //TWAI_ERR_WARNING_LIMIT_REG
+#define REG_RXERR                  0x0e //TWAI_RX_ERR_CNT_REG
+#define REG_TXERR                  0x0f //TWAI_TX_ERR_CNT_REG
+#define REG_SFF                    0x10 //TWAI_DATA_0_REG
+#define REG_EFF                    0x10 //TWAI_DATA_0_REG (By Henry warning) Is this address correct? Is the same address as REG_SFF?
 #define REG_ACRn(n)                (0x10 + n)
 #define REG_AMRn(n)                (0x14 + n)
 
@@ -70,7 +73,13 @@ int ESP32SJA1000Class::begin(long baudRate)
   modifyRegister(REG_BTR0, 0xc0, 0x40); // SJW = 1
   modifyRegister(REG_BTR1, 0x70, 0x10); // TSEG2 = 1
 
-  switch (baudRate) {
+  if (baudRate >= 50E3)
+  {
+    if (ESP.getChipRevision() >= 2)       // New ESP revision 2 have brp_div bit (CONFIG_ESP32_REV_MIN). It mantain this div disabled. If enabled baudRate configuration need to be multiplied by 2.
+      modifyRegister(REG_IER, BRP_DIV_EN_BIT, 0x00);
+    else {}                               //Do nothing, this bit is reserved on Rev 1 chips.
+
+    switch (baudRate) {
     case (long)1000E3:
       modifyRegister(REG_BTR1, 0x0f, 0x04);
       modifyRegister(REG_BTR0, 0x3f, 4);
@@ -111,27 +120,47 @@ int ESP32SJA1000Class::begin(long baudRate)
       modifyRegister(REG_BTR0, 0x3f, 49);
       break;
 
-/*
-   Due to limitations in ESP32 hardware and/or RTOS software, baudrate can't be lower than 50kbps.
-   See https://esp32.com/viewtopic.php?t=2142
-*/
     default:
       return 0;
       break;
+    }//switch
+  }
+  else
+  {
+    if (ESP.getChipRevision() >= 2)       // New ESP revision 2 have brp_div bit (CONFIG_ESP32_REV_MIN) that can be used to divide by 2 the frequencies.
+      modifyRegister(REG_IER, BRP_DIV_EN_BIT, BRP_DIV_EN_BIT);
+    else  return 0;
+    switch (baudRate)
+    {
+    case (long)40E3:
+      modifyRegister(REG_BTR1, 0x0f, 0x0c);
+      modifyRegister(REG_BTR0, 0x3f, 30);
+      break;
+
+    case (long)20E3:
+      modifyRegister(REG_BTR1, 0x0f, 0x4d);
+      modifyRegister(REG_BTR0, 0x3f, 30);
+      break;
+
+    default:
+      return 0;
+      break;
+    }
   }
 
   modifyRegister(REG_BTR1, 0x80, 0x80); // SAM = 1
-  writeRegister(REG_IER, 0xff); // enable all interrupts
+  modifyRegister(REG_IER, 0xef, DRIVER_DEFAULT_INTERRUPTS); // Enable some interrupts
 
   // set filter to allow anything
-  writeRegister(REG_ACRn(0), 0x00);
+  writeRegister(REG_ACRn(0), 0x00);//id
   writeRegister(REG_ACRn(1), 0x00);
   writeRegister(REG_ACRn(2), 0x00);
   writeRegister(REG_ACRn(3), 0x00);
-  writeRegister(REG_AMRn(0), 0xff);
+  writeRegister(REG_AMRn(0), 0xff);//mask
   writeRegister(REG_AMRn(1), 0xff);
   writeRegister(REG_AMRn(2), 0xff);
   writeRegister(REG_AMRn(3), 0xff);
+
 
   modifyRegister(REG_OCR, 0x03, 0x02); // normal output mode
   // reset error counters
@@ -142,9 +171,11 @@ int ESP32SJA1000Class::begin(long baudRate)
   readRegister(REG_ECC);
   readRegister(REG_IR);
 
+  // single filter mode
+  modifyRegister(REG_MOD, 0x08, 0x08);//Single filter mode
+
   // normal mode
-  modifyRegister(REG_MOD, 0x08, 0x08);
-  modifyRegister(REG_MOD, 0x17, 0x00);
+  modifyRegister(REG_MOD, 0x07, 0x00);//Self test mode off / Listen only mode off / Operating mode
 
   return 1;
 }
@@ -197,16 +228,16 @@ int ESP32SJA1000Class::endPacket()
 
   if ( _loopback) {
     // self reception request
-    modifyRegister(REG_CMR, 0x1f, 0x10);
+    modifyRegister(REG_CMR, 0x10, 0x10); // Only bit TWAI_SELF_RX_REQ is modified.
   } else {
     // transmit request
-    modifyRegister(REG_CMR, 0x1f, 0x01);
+    modifyRegister(REG_CMR, 0x01, 0x01); // Only bit TWAI_TX_REQ is modified.
   }
 
   // wait for TX complete
   while ((readRegister(REG_SR) & 0x08) != 0x08) {
-    if (readRegister(REG_ECC) == 0xd9) {
-      modifyRegister(REG_CMR, 0x1f, 0x02); // error, abort
+    if (readRegister(REG_ECC) == 0xd9) {//(By Henry warning) I think that is not correct. 0xd9 is a very specific conjunction of errors codes. Look this register in the manual: TWAI_ERR_CODE_CAP_REG
+      modifyRegister(REG_CMR, 0x02, 0x02); // Only bit TWAI_ABORT_TX is modified.
       return 0;
     }
     yield();
@@ -247,6 +278,7 @@ int ESP32SJA1000Class::parsePacket()
   } else {
     _rxLength = _rxDlc;
 
+    if (_rxLength > 8)_rxLength = 8;  // Protect _rxData pointer overload
     for (int i = 0; i < _rxLength; i++) {
       _rxData[i] = readRegister(dataReg + i);
     }
@@ -277,7 +309,7 @@ int ESP32SJA1000Class::filter(int id, int mask)
   id &= 0x7ff;
   mask = ~(mask & 0x7ff);
 
-  modifyRegister(REG_MOD, 0x17, 0x01); // reset
+  modifyRegister(REG_MOD, 0x01, 0x01); // Only reset mode bit is modified.
 
   writeRegister(REG_ACRn(0), id >> 3);
   writeRegister(REG_ACRn(1), id << 5);
@@ -289,45 +321,46 @@ int ESP32SJA1000Class::filter(int id, int mask)
   writeRegister(REG_AMRn(2), 0xff);
   writeRegister(REG_AMRn(3), 0xff);
 
-  modifyRegister(REG_MOD, 0x17, 0x00); // normal
+  modifyRegister(REG_MOD, 0x01, 0x00); // Only operating mode bit is modified.
 
   return 1;
 }
 
 int ESP32SJA1000Class::filterExtended(long id, long mask, bool rtrId, bool rtrMask)
 {
-	modifyRegister(REG_MOD, 0x01, 0x01); // reset mode
+  modifyRegister(REG_MOD, 0x01, 0x01); // reset mode
 
-	uint32_t idFilter = id & 0x1FFFFFFF;        //'1' and '0' bits need to be exact as the received bit to be a valid ID.
-	uint32_t maskFilter = mask & 0x1FFFFFFF;    //'1' bits admit all bits to be received. '0' bits admit bits to be received only if the idFilter bits equals the id input bit in CAN.
-	uint8_t temp[4];
+  uint32_t idFilter = id & 0x1FFFFFFF;        //'1' and '0' bits need to be exact as the received bit to be a valid ID.
+  uint32_t maskFilter = mask & 0x1FFFFFFF;    //'1' bits admit all bits to be received. '0' bits admit bits to be received only if the idFilter bits equals the id input bit in CAN.
+  uint8_t temp[4];
 
-	idFilter <<= 3;
-	if (rtrId) idFilter |= (1 << 2); //RTR in bit 2
-	memcpy(temp, &idFilter, 4);
-	writeRegister(REG_ACRn(0), temp[3]);//id
-	writeRegister(REG_ACRn(1), temp[2]);
-	writeRegister(REG_ACRn(2), temp[1]);
-	writeRegister(REG_ACRn(3), temp[0]);
+  idFilter <<= 3;
+  if (rtrId) idFilter |= (1 << 2); //RTR in bit 2
+  memcpy(temp, &idFilter, 4);
+  writeRegister(REG_ACRn(0), temp[3]);//id
+  writeRegister(REG_ACRn(1), temp[2]);
+  writeRegister(REG_ACRn(2), temp[1]);
+  writeRegister(REG_ACRn(3), temp[0]);
 
-	maskFilter <<= 3;
-	if (rtrMask) maskFilter |= (1 << 2); //RTR in bit 2
-	memcpy(temp, &maskFilter, 4);
-	writeRegister(REG_AMRn(0), temp[3]);//mask
-	writeRegister(REG_AMRn(1), temp[2]);
-	writeRegister(REG_AMRn(2), temp[1]);
-	writeRegister(REG_AMRn(3), temp[0]);
+  maskFilter <<= 3;
+  if (rtrMask) maskFilter |= (1 << 2); //RTR in bit 2
+  memcpy(temp, &maskFilter, 4);
+  writeRegister(REG_AMRn(0), temp[3]);//mask
+  writeRegister(REG_AMRn(1), temp[2]);
+  writeRegister(REG_AMRn(2), temp[1]);
+  writeRegister(REG_AMRn(3), temp[0]);
 
-	modifyRegister(REG_MOD, 0x01, 0x00); // (By Henry) Operating mode
-	modifyRegister(REG_MOD, 0x08, 0x08); // (By Henry) Single filter mode TWAI_RX_FILTER_MODE
+  modifyRegister(REG_MOD, 0x01, 0x00); // (By Henry) Operating mode
+  modifyRegister(REG_MOD, 0x08, 0x08); // (By Henry) Single filter mode TWAI_RX_FILTER_MODE
 
-	return 1;
+  return 1;
 }
 
 int ESP32SJA1000Class::observe()
 {
-  modifyRegister(REG_MOD, 0x17, 0x01); // reset
-  modifyRegister(REG_MOD, 0x17, 0x02); // observe
+  modifyRegister(REG_MOD, 0x01, 0x01); // Only reset mode bit is modified.
+  modifyRegister(REG_MOD, 0x02, 0x02); // Only listen only mode bit is modified.
+  modifyRegister(REG_MOD, 0x01, 0x00); // Only Operating mode bit is modified.
 
   return 1;
 }
@@ -336,8 +369,9 @@ int ESP32SJA1000Class::loopback()
 {
   _loopback = true;
 
-  modifyRegister(REG_MOD, 0x17, 0x01); // reset
-  modifyRegister(REG_MOD, 0x17, 0x04); // self test mode
+  modifyRegister(REG_MOD, 0x01, 0x01); // Only reset mode bit is modified.
+  modifyRegister(REG_MOD, 0x04, 0x04); // Only self test mode bit is modified.
+  modifyRegister(REG_MOD, 0x01, 0x00); // Only Operating mode bit is modified.
 
   return 1;
 }
@@ -345,6 +379,7 @@ int ESP32SJA1000Class::loopback()
 int ESP32SJA1000Class::sleep()
 {
   modifyRegister(REG_MOD, 0x1f, 0x10);
+  //ATENTION: (By Henry warning) I dont find this flag in manual. The TWAI_MODE_REG have only bits 0~3.
 
   return 1;
 }
@@ -352,6 +387,7 @@ int ESP32SJA1000Class::sleep()
 int ESP32SJA1000Class::wakeup()
 {
   modifyRegister(REG_MOD, 0x1f, 0x00);
+  //ATENTION: (By Henry warning) I dont find this flag in manual. The TWAI_MODE_REG have only bits 0~3.
 
   return 1;
 }
@@ -388,6 +424,7 @@ void ESP32SJA1000Class::handleInterrupt()
     // received packet, parse and call callback
     parsePacket();
 
+  if (_onReceive != 0)  // Protect to use only when a valid pointer is used.
     _onReceive(available());
   }
 }
